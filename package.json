@@ -5,6 +5,7 @@
   "type": "module",
   "description": "An auditable AI DevOps agent for turning developer notes, issues, and logs into intent, evaluated action plans, and safe execution records.",
   "scripts": {
+    "start": "node scripts/dev-server.js",
     "dev": "node scripts/dev-server.js",
     "check": "node --input-type=module -e \"import('./packages/core/intentops.js').then(({ runHarness }) => { const result = runHarness('CI failing. README needs update. Draft GitHub issue after approval.'); if (!result.ledgerEntry.hash || !result.selected.id) process.exit(1); console.log('intentops core ok:', result.selected.id, result.consent.status, result.ledgerEntry.hash); })\""
   },
