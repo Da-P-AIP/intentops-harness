@@ -47,6 +47,7 @@ const elements = {
   artifactsPanel: document.querySelector(".artifacts-panel"),
   completionNote: document.querySelector("#completionNote"),
   completionBeacon: document.querySelector("#completionBeacon"),
+  openPreviewLink: document.querySelector("#openPreviewLink"),
   saveArtifactsButton: document.querySelector("#saveArtifactsButton"),
   saveNote: document.querySelector("#saveNote"),
   ledgerOutput: document.querySelector("#ledgerOutput"),
@@ -146,11 +147,17 @@ elements.saveArtifactsButton.addEventListener("click", async () => {
 
   const saved = await saveArtifacts(state.latestResult);
   if (saved) {
-    elements.saveNote.textContent = `Saved: ${saved.directory} / open artifact-preview.html for the one-page preview.`;
+    const previewPath = saved.files?.find((file) => file.endsWith("artifact-preview.html"));
+    if (previewPath) {
+      elements.openPreviewLink.href = `/${previewPath}`;
+      elements.openPreviewLink.hidden = false;
+    }
+    elements.saveNote.textContent = `Saved: ${saved.directory}. Open Preview to review the one-page artifact.`;
     elements.saveNote.classList.add("saved");
   } else {
     elements.saveNote.textContent = "Save failed. The generated artifacts are still visible here.";
     elements.saveNote.classList.remove("saved");
+    elements.openPreviewLink.hidden = true;
   }
 
   elements.saveArtifactsButton.textContent = "Save Files";
@@ -177,6 +184,7 @@ function render(result) {
   elements.saveArtifactsButton.disabled = false;
   elements.saveNote.textContent = "Save README / Issue / Decision as Markdown files.";
   elements.saveNote.classList.remove("saved");
+  elements.openPreviewLink.hidden = true;
   revealResults();
 }
 
@@ -344,6 +352,7 @@ function resetRunView() {
   elements.saveArtifactsButton.disabled = true;
   elements.saveNote.textContent = "Saved files will appear under generated-artifacts/.";
   elements.saveNote.classList.remove("saved");
+  elements.openPreviewLink.hidden = true;
 }
 
 function renderLedger() {
