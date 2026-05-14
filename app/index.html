@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IntentOps Harness</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">IntentOps Harness</p>
+        <h1>Reportable, auditable AI DevOps Agent</h1>
+      </div>
+      <div class="topbar-status">
+        <div class="status-pill" id="aiStatus">AI: local fallback</div>
+        <div class="status-pill" id="chainStatus">Ledger: GENESIS</div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="input-pane" aria-label="Input">
+        <div class="section-heading">
+          <h2>Developer Note</h2>
+          <button id="loadSampleButton" type="button">Load Sample</button>
+        </div>
+        <textarea id="inputText" spellcheck="true">CI is failing after the latest docs change. README needs a clearer setup section, and two related bugs should become GitHub issues. Do not deploy anything automatically. Prefer safe drafts before remote actions.</textarea>
+        <div class="button-row">
+          <button class="primary" id="runButton" type="button">Run Harness</button>
+          <button id="approveButton" type="button" disabled>Approve Pending Plan</button>
+        </div>
+      </section>
+
+      <section class="output-grid" aria-live="polite">
+        <article class="loop-console" aria-label="Autonomous Loop">
+          <div class="loop-copy">
+            <p class="eyebrow">Autonomous Loop</p>
+            <h2>Observe -> Packetize -> Plan -> Evaluate -> Gate -> Act -> Verify -> Log</h2>
+            <div class="process-feed" id="processFeed" aria-label="Processing status">
+              <div class="process-feed-head">
+                <span class="live-dot"></span>
+                <strong id="processTitle">standby</strong>
+              </div>
+              <ol id="processSteps">
+                <li data-process-step="Observe">Observe input</li>
+                <li data-process-step="Packetize">Gemini packetizing intent</li>
+                <li data-process-step="Plan">Generating proposals</li>
+                <li data-process-step="Evaluate">Scoring HFE options</li>
+                <li data-process-step="Gate">Checking consent gate</li>
+                <li data-process-step="Act">Drafting safe artifacts</li>
+                <li data-process-step="Verify">Verifying outputs</li>
+                <li data-process-step="Log">Writing ledger hash</li>
+              </ol>
+            </div>
+          </div>
+          <div class="loop-stage" id="loopStage">
+            <div class="orbit orbit-one"></div>
+            <div class="orbit orbit-two"></div>
+            <div class="loop-core">
+              <span>IntentOps</span>
+              <strong id="loopStatus">standby</strong>
+            </div>
+            <div class="loop-node" style="--x: 50%; --y: 9%" data-step="Observe">Observe</div>
+            <div class="loop-node" style="--x: 79%; --y: 21%" data-step="Packetize">Packetize</div>
+            <div class="loop-node" style="--x: 91%; --y: 50%" data-step="Plan">Plan</div>
+            <div class="loop-node" style="--x: 79%; --y: 79%" data-step="Evaluate">Evaluate</div>
+            <div class="loop-node" style="--x: 50%; --y: 91%" data-step="Gate">Gate</div>
+            <div class="loop-node" style="--x: 21%; --y: 79%" data-step="Act">Act</div>
+            <div class="loop-node" style="--x: 9%; --y: 50%" data-step="Verify">Verify</div>
+            <div class="loop-node" style="--x: 21%; --y: 21%" data-step="Log">Log</div>
+          </div>
+          <div class="signal-rail" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </article>
+
+        <article class="panel packet-panel">
+          <div class="section-heading">
+            <h2>Thought Packet</h2>
+            <span id="urgencyBadge" class="badge">not run</span>
+          </div>
+          <dl id="packetOutput" class="definition-list"></dl>
+        </article>
+
+        <article class="panel">
+          <div class="section-heading">
+            <h2>HFE Planner</h2>
+            <span id="selectedBadge" class="badge">waiting</span>
+          </div>
+          <div id="proposalOutput" class="proposal-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="section-heading">
+            <h2>Consent Gate</h2>
+            <span id="consentBadge" class="badge">waiting</span>
+          </div>
+          <p id="consentReason" class="muted">Run the harness to evaluate execution permission.</p>
+          <div id="verificationOutput" class="check-list"></div>
+        </article>
+
+        <article class="panel artifacts-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Generated Artifacts</h2>
+              <p class="completion-note" id="completionNote">Artifacts will glow when the run is complete.</p>
+            </div>
+            <span class="completion-beacon" id="completionBeacon">Artifacts ready</span>
+            <div class="tabs" role="tablist" aria-label="Artifacts">
+              <button class="tab active" data-artifact="readmeDraft" type="button">README</button>
+              <button class="tab" data-artifact="issueDraft" type="button">Issue</button>
+              <button class="tab" data-artifact="decisionRecord" type="button">Decision</button>
+            </div>
+            <button id="saveArtifactsButton" type="button" disabled>Save Files</button>
+          </div>
+          <p class="save-note" id="saveNote">Saved files will appear under generated-artifacts/.</p>
+          <pre id="artifactOutput"></pre>
+        </article>
+
+        <article class="panel ledger-panel">
+          <div class="section-heading">
+            <h2>Action Ledger</h2>
+            <span id="ledgerCount" class="badge">0 entries</span>
+          </div>
+          <div id="ledgerOutput" class="ledger-list"></div>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="/app/main.js"></script>
+  </body>
+</html>
