@@ -37,10 +37,13 @@ The harness controls risk, consent, verification, artifact saving, and the ledge
 - `Thought Packet`: what the agent understood
 - `HFE Planner`: compared action options
 - `Consent Gate`: whether execution is safe
+- `Quality Gate`: self-review score and refinement status
 - `Generated Artifacts`: README, Issue, and Decision drafts
 - `Action Ledger`: hash-chained decision record
 
 7. Click `Save Files`.
+
+If the Quality Gate is below 80%, click `Refine Once` first and show that the second pass is also ledgered.
 
 8. Open:
 
@@ -74,7 +77,7 @@ Observe -> Packetize -> Plan -> Evaluate -> Gate -> Act -> Verify -> Log
 
 ### 3. Live Run
 
-Use the calculator or mini-game prompt.
+Use the calculator, invader, mini-game, or domain report prompt.
 
 Click `Run Harness`.
 
@@ -107,7 +110,9 @@ manifest.json
 
 Open `artifact-preview.html`.
 
-For a calculator prompt, the preview includes a small interactive calculator. For a mini-game prompt, it includes a small click game preview.
+For calculator, invader, and mini-game prompts, the preview includes a small local interactive demo.
+
+For broader prompts such as an RPG concept or financial summary, Gemini returns a restricted artifact spec. The harness renders that spec as safe HTML sections, highlights, and table rows.
 
 ### 5. Safety Point
 
@@ -128,6 +133,16 @@ Do not deploy automatically. Prefer safe drafts before remote actions.
 ```
 
 This shows the DevOps triage side of the project.
+
+## Generality Prompt
+
+```text
+Summarize this financial statement for reviewers.
+Create a saved HTML preview with revenue, expenses, profit, risks, and next actions.
+Do not send anything externally.
+```
+
+This shows that the artifact preview is not limited to calculator/game templates.
 
 ## Pre-Submission Checklist
 

@@ -35,6 +35,12 @@ const elements = {
   consentBadge: document.querySelector("#consentBadge"),
   consentReason: document.querySelector("#consentReason"),
   verificationOutput: document.querySelector("#verificationOutput"),
+  qualityPanel: document.querySelector(".quality-panel"),
+  qualityBadge: document.querySelector("#qualityBadge"),
+  qualityFill: document.querySelector("#qualityFill"),
+  qualityReason: document.querySelector("#qualityReason"),
+  qualityFindings: document.querySelector("#qualityFindings"),
+  refineButton: document.querySelector("#refineButton"),
   artifactOutput: document.querySelector("#artifactOutput"),
   artifactsPanel: document.querySelector(".artifacts-panel"),
   completionNote: document.querySelector("#completionNote"),
@@ -99,6 +105,29 @@ elements.approveButton.addEventListener("click", () => {
   endProcessing(state.latestResult.ai);
 });
 
+elements.refineButton.addEventListener("click", async () => {
+  if (!state.latestResult) return;
+
+  const quality = state.latestResult.qualityGate;
+  if (!quality || quality.iteration >= quality.maxIterations) return;
+
+  const previousHash = state.ledger.at(-1)?.hash ?? "GENESIS";
+  beginProcessing(["Packetize", "Plan", "Evaluate"]);
+  elements.qualityPanel.classList.add("refining");
+  elements.refineButton.disabled = true;
+  elements.refineButton.textContent = "Refining...";
+  elements.aiStatus.textContent = "AI: refining with Gemini";
+
+  const result = await refineWithServer(elements.inputText.value.trim(), previousHash, state.latestResult);
+  state.latestResult = result;
+  state.ledger.push(result.ledgerEntry);
+  render(result);
+  endProcessing(result.ai);
+
+  elements.qualityPanel.classList.remove("refining");
+  elements.refineButton.textContent = "Refine Once";
+});
+
 elements.saveArtifactsButton.addEventListener("click", async () => {
   if (!state.latestResult) return;
 
@@ -132,12 +161,38 @@ function render(result) {
   renderProposals(result.proposals, result.selected);
   renderConsent(result.consent);
   renderVerification(result.verification);
+  renderQuality(result.qualityGate);
   renderArtifact();
   renderLedger();
   elements.saveArtifactsButton.disabled = false;
   elements.saveNote.textContent = "Save README / Issue / Decision as Markdown files.";
   elements.saveNote.classList.remove("saved");
   revealResults();
+}
+
+function renderQuality(quality) {
+  if (!quality) {
+    elements.qualityBadge.textContent = "waiting";
+    elements.qualityFill.style.width = "0%";
+    elements.qualityReason.textContent = "Run the harness to self-review artifacts.";
+    elements.qualityFindings.innerHTML = "";
+    elements.refineButton.disabled = true;
+    return;
+  }
+
+  elements.qualityBadge.textContent = `${quality.score}% ${quality.status}`;
+  elements.qualityBadge.className = quality.status === "pass" ? "badge" : "badge medium";
+  elements.qualityFill.style.width = `${quality.score}%`;
+  elements.qualityReason.textContent = quality.suggestedRefinement;
+  elements.qualityFindings.innerHTML = "";
+
+  for (const finding of quality.findings) {
+    const item = document.createElement("li");
+    item.textContent = finding;
+    elements.qualityFindings.append(item);
+  }
+
+  elements.refineButton.disabled = quality.status === "pass" || quality.iteration >= quality.maxIterations;
 }
 
 function renderAiStatus(ai) {
@@ -318,6 +373,31 @@ async function runWithServer(input, previousHash) {
       ...runHarness(input, previousHash),
       input,
       ai: { provider: "local", model: "browser-fallback", status: "fallback" },
+    };
+  }
+}
+
+async function refineWithServer(input, previousHash, previousResult) {
+  try {
+    const response = await fetch("/api/refine", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input, previousHash, previousResult }),
+    });
+
+    if (!response.ok) throw new Error(`server returned ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.warn(`Refine fallback: ${error.message}`);
+    return {
+      ...runHarness(
+        `${input}\n\nRefine once: strengthen acceptance criteria, test notes, and saved artifact clarity.`,
+        previousHash,
+        null,
+        { iteration: 2 },
+      ),
+      input,
+      ai: { provider: "local", model: "browser-refine-fallback", status: "fallback" },
     };
   }
 }

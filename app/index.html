@@ -101,6 +101,19 @@
           <div id="verificationOutput" class="check-list"></div>
         </article>
 
+        <article class="panel quality-panel">
+          <div class="section-heading">
+            <h2>Quality Gate</h2>
+            <span id="qualityBadge" class="badge">waiting</span>
+          </div>
+          <div class="quality-meter" aria-label="Quality score">
+            <div id="qualityFill"></div>
+          </div>
+          <p id="qualityReason" class="muted">Run the harness to self-review artifacts.</p>
+          <ul id="qualityFindings" class="quality-list"></ul>
+          <button id="refineButton" type="button" disabled>Refine Once</button>
+        </article>
+
         <article class="panel artifacts-panel">
           <div class="section-heading">
             <div>

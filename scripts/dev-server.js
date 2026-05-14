@@ -31,6 +31,11 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/refine") {
+      await handleRefine(request, response);
+      return;
+    }
+
     serveStatic(url.pathname, response);
   } catch (error) {
     response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
@@ -68,6 +73,52 @@ async function handleRun(request, response) {
   );
 }
 
+async function handleRefine(request, response) {
+  const body = await readJsonBody(request);
+  const input = String(body.input || "");
+  const previousHash = String(body.previousHash || "GENESIS");
+  const previousResult = body.previousResult || {};
+  const previousQuality = previousResult.qualityGate || {};
+  const nextIteration = Math.min(Number(previousQuality.iteration || 1) + 1, 2);
+
+  if (!input.trim()) {
+    response.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({ error: "input is required" }));
+    return;
+  }
+
+  const refinementInput = [
+    input,
+    "",
+    "Refinement request:",
+    "Improve the previous artifacts so the Quality Gate can reach at least 80%.",
+    "Strengthen acceptance criteria, test notes, saved artifact clarity, and reviewer usefulness.",
+    "Keep the plan safe and avoid direct deployment or remote side effects.",
+    "",
+    "Previous quality findings:",
+    ...(previousQuality.findings || []),
+    "",
+    "Previous selected plan:",
+    previousResult.selected?.title || "",
+    previousResult.selected?.action || "",
+  ].join("\n");
+
+  const aiDraft = await createGeminiDraft(refinementInput);
+  const result = runHarness(refinementInput, previousHash, aiDraft, { iteration: nextIteration });
+
+  response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+  response.end(
+    JSON.stringify({
+      ...result,
+      input,
+      refinedFrom: previousResult.ledgerEntry?.hash || null,
+      ai: aiDraft
+        ? { provider: "gemini", model: process.env.GEMINI_MODEL || "gemini-2.5-flash", status: "used" }
+        : { provider: "local", model: "rule-based-fallback", status: "fallback" },
+    }),
+  );
+}
+
 async function handleSaveArtifacts(request, response) {
   const body = await readJsonBody(request);
   const artifacts = body.artifacts || {};
@@ -98,6 +149,9 @@ async function handleSaveArtifacts(request, response) {
           previousHash: ledgerEntry.previousHash || null,
           selectedPlan: ledgerEntry.selectedPlan?.title || null,
           consent: ledgerEntry.consent?.status || null,
+          qualityScore: ledgerEntry.qualityGate?.score || null,
+          qualityStatus: ledgerEntry.qualityGate?.status || null,
+          artifactType: ledgerEntry.artifactSpec?.artifactType || null,
         },
         null,
         2,
@@ -170,8 +224,24 @@ async function createGeminiDraft(input) {
     '        "product": "product view"',
     "      }",
     "    }",
-    "  ]",
+    "  ],",
+    '  "artifactSpec": {',
+    '    "title": "preview title",',
+    '    "artifactType": "calculator | game | report | dashboard | document | generic",',
+    '    "summary": "what the saved preview should communicate",',
+    '    "highlights": ["short highlight"],',
+    '    "sections": [',
+    '      { "heading": "section heading", "body": "safe plain-text content for the preview" }',
+    "    ],",
+    '    "table": [',
+    '      { "Label": "row label", "Value": "row value" }',
+    "    ]",
+    "  }",
     "}",
+    "",
+    "For artifactSpec, do not output HTML, CSS, JavaScript, Markdown fences, external links, or remote resources.",
+    "Use artifactSpec to make the saved artifact-preview.html domain-aware for the user request.",
+    "Examples: RPG requests should include character/map/quest/battle sections; financial requests should include metric rows and risk/next-action sections.",
     "",
     "Developer input:",
     input,
@@ -262,6 +332,7 @@ function safeSegment(value) {
 function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash }) {
   const packet = ledgerEntry.packet || {};
   const selectedPlan = ledgerEntry.selectedPlan || {};
+  const artifactSpec = ledgerEntry.artifactSpec || {};
   const sourceText = [
     packet.summary,
     packet.goal,
@@ -277,6 +348,10 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
     .join("\n")
     .toLowerCase();
   const shouldShowCalculator = sourceText.includes("calculator") || sourceText.includes("\u96fb\u5353");
+  const shouldShowInvader =
+    sourceText.includes("invader") ||
+    sourceText.includes("space invaders") ||
+    sourceText.includes("\u30a4\u30f3\u30d9\u30fc\u30c0\u30fc");
   const shouldShowGame =
     sourceText.includes("mini-game") ||
     sourceText.includes("minigame") ||
@@ -284,9 +359,11 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
     sourceText.includes("\u30b2\u30fc\u30e0");
   const optionalDemo = shouldShowCalculator
     ? calculatorDemoHtml()
-    : shouldShowGame
-      ? gameDemoHtml()
-      : genericPreviewHtml(artifacts);
+    : shouldShowInvader
+      ? invaderDemoHtml()
+      : shouldShowGame
+        ? gameDemoHtml()
+        : structuredPreviewHtml(artifactSpec);
 
   return `<!doctype html>
 <html lang="en">
@@ -408,14 +485,16 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
         dl { grid-template-columns: 1fr; }
       }
       ${shouldShowCalculator ? calculatorStyles() : ""}
+      ${shouldShowInvader ? invaderStyles() : ""}
       ${shouldShowGame ? gameStyles() : ""}
+      ${!shouldShowCalculator && !shouldShowInvader && !shouldShowGame ? structuredPreviewStyles() : ""}
     </style>
   </head>
   <body>
     <header>
       <div>
         <p class="eyebrow">IntentOps Artifact Preview</p>
-        <h1>${escapeHtml(selectedPlan.title || "Generated Artifact")}</h1>
+        <h1>${escapeHtml(artifactSpec.title || selectedPlan.title || "Generated Artifact")}</h1>
       </div>
       <span class="badge">Ledger ${escapeHtml(ledgerEntry.hash || "untracked")}</span>
     </header>
@@ -440,6 +519,8 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
           <dd>${escapeHtml(ledgerEntry.consent?.status || "not recorded")}</dd>
           <dt>Risk</dt>
           <dd>${escapeHtml(selectedPlan.risk || "not recorded")}</dd>
+          <dt>Quality</dt>
+          <dd>${escapeHtml(ledgerEntry.qualityGate ? `${ledgerEntry.qualityGate.score}% ${ledgerEntry.qualityGate.status}` : "not recorded")}</dd>
           <dt>Plan</dt>
           <dd>${escapeHtml(selectedPlan.action || "Not provided")}</dd>
         </dl>
@@ -459,10 +540,64 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
       </section>
     </main>
     ${shouldShowCalculator ? calculatorScript() : ""}
+    ${shouldShowInvader ? invaderScript() : ""}
     ${shouldShowGame ? gameScript() : ""}
   </body>
 </html>
 `;
+}
+
+function structuredPreviewHtml(spec = {}) {
+  const sections = Array.isArray(spec.sections) ? spec.sections.slice(0, 8) : [];
+  const highlights = Array.isArray(spec.highlights) ? spec.highlights.slice(0, 6) : [];
+  const table = Array.isArray(spec.table) ? spec.table.slice(0, 8) : [];
+  const tableKeys = [...new Set(table.flatMap((row) => Object.keys(row || {}).slice(0, 5)))].slice(0, 5);
+
+  return `<section class="structured-preview">
+        <div class="structured-head">
+          <div>
+            <h2>${escapeHtml(spec.title || "Generated Output")}</h2>
+            <p>${escapeHtml(spec.summary || "Review this safe, structured preview before applying any side effects.")}</p>
+          </div>
+          <span class="badge">${escapeHtml(spec.artifactType || "generic")}</span>
+        </div>
+        ${
+          highlights.length
+            ? `<div class="highlight-grid">${highlights
+                .map((highlight) => `<div class="highlight-item">${escapeHtml(highlight)}</div>`)
+                .join("")}</div>`
+            : ""
+        }
+        ${
+          sections.length
+            ? `<div class="preview-sections">${sections
+                .map(
+                  (section) => `<article>
+                    <h3>${escapeHtml(section.heading || "Section")}</h3>
+                    <p>${escapeHtml(section.body || "")}</p>
+                  </article>`,
+                )
+                .join("")}</div>`
+            : `<p>This page is a saved one-file preview of the artifacts generated by IntentOps Harness. Review the Markdown drafts below before applying any side effects.</p>`
+        }
+        ${
+          table.length && tableKeys.length
+            ? `<div class="table-wrap">
+                <table>
+                  <thead><tr>${tableKeys.map((key) => `<th>${escapeHtml(key)}</th>`).join("")}</tr></thead>
+                  <tbody>
+                    ${table
+                      .map(
+                        (row) =>
+                          `<tr>${tableKeys.map((key) => `<td>${escapeHtml(row?.[key] ?? "")}</td>`).join("")}</tr>`,
+                      )
+                      .join("")}
+                  </tbody>
+                </table>
+              </div>`
+            : ""
+        }
+      </section>`;
 }
 
 function genericPreviewHtml() {
@@ -513,6 +648,110 @@ function gameDemoHtml() {
           <button id="restart" type="button">Restart</button>
         </div>
       </section>`;
+}
+
+function invaderDemoHtml() {
+  return `<section>
+        <h2>Invader Game Preview</h2>
+        <div class="invader-demo" aria-label="Invader game preview">
+          <div class="invader-hud">
+            <strong>Score: <span id="invaderScore">0</span></strong>
+            <span id="invaderStatus">Move: Left / Right, Fire: Space</span>
+          </div>
+          <div id="invaderField">
+            <div id="invaderFleet"></div>
+            <div id="ship"></div>
+            <div id="laser"></div>
+          </div>
+          <div class="invader-controls">
+            <button id="leftBtn" type="button">Left</button>
+            <button id="fireBtn" type="button">Fire</button>
+            <button id="rightBtn" type="button">Right</button>
+            <button id="resetInvaders" type="button">Restart</button>
+          </div>
+        </div>
+      </section>`;
+}
+
+function structuredPreviewStyles() {
+  return `
+      .structured-preview {
+        display: grid;
+        gap: 18px;
+      }
+      .structured-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .structured-head p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .highlight-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .highlight-item {
+        border: 1px solid rgba(31, 122, 109, 0.18);
+        border-radius: 8px;
+        background: #f6fbf9;
+        color: var(--accent);
+        font-size: 14px;
+        font-weight: 800;
+        line-height: 1.45;
+        padding: 12px;
+      }
+      .preview-sections {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .preview-sections article {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfdfc;
+        padding: 14px;
+      }
+      .preview-sections h3 {
+        margin: 0 0 8px;
+        font-size: 17px;
+      }
+      .preview-sections p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+        white-space: pre-wrap;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 520px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 12px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f6fbf9;
+        color: var(--accent);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }`;
 }
 
 function calculatorStyles() {
@@ -630,6 +869,97 @@ function gameStyles() {
       }`;
 }
 
+function invaderStyles() {
+  return `
+      .invader-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .invader-hud {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      #invaderField {
+        position: relative;
+        height: 360px;
+        overflow: hidden;
+        border-radius: 8px;
+        background:
+          linear-gradient(rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          #101b1f;
+        background-size: 24px 24px;
+      }
+      #invaderFleet {
+        position: absolute;
+        left: 50%;
+        top: 34px;
+        display: grid;
+        grid-template-columns: repeat(6, 34px);
+        gap: 12px;
+        transform: translateX(-50%);
+      }
+      .invader {
+        width: 34px;
+        height: 24px;
+        border-radius: 6px 6px 3px 3px;
+        background: var(--mint);
+        box-shadow: 0 0 14px rgba(94, 224, 189, 0.46);
+      }
+      #ship {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        width: 54px;
+        height: 28px;
+        border-radius: 8px 8px 4px 4px;
+        background: #1f7a6d;
+        transform: translateX(-50%);
+        box-shadow: 0 0 20px rgba(44, 184, 199, 0.42);
+      }
+      #ship::before {
+        position: absolute;
+        left: 19px;
+        top: -13px;
+        width: 16px;
+        height: 16px;
+        border-radius: 3px 3px 0 0;
+        background: #1f7a6d;
+        content: "";
+      }
+      #laser {
+        position: absolute;
+        display: none;
+        width: 4px;
+        height: 22px;
+        border-radius: 999px;
+        background: #ffffff;
+        box-shadow: 0 0 14px rgba(255, 255, 255, 0.9);
+      }
+      .invader-controls {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .invader-controls button {
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 900;
+      }`;
+}
+
 function calculatorScript() {
   return `<script>
       const display = document.querySelector("#display");
@@ -707,6 +1037,102 @@ function gameScript() {
       });
       restart.addEventListener("click", start);
       start();
+    </script>`;
+}
+
+function invaderScript() {
+  return `<script>
+      const field = document.querySelector("#invaderField");
+      const fleet = document.querySelector("#invaderFleet");
+      const ship = document.querySelector("#ship");
+      const laser = document.querySelector("#laser");
+      const scoreEl = document.querySelector("#invaderScore");
+      const statusEl = document.querySelector("#invaderStatus");
+      const leftBtn = document.querySelector("#leftBtn");
+      const rightBtn = document.querySelector("#rightBtn");
+      const fireBtn = document.querySelector("#fireBtn");
+      const resetBtn = document.querySelector("#resetInvaders");
+      let shipX = 50;
+      let score = 0;
+      let laserTimer = null;
+
+      function buildFleet() {
+        fleet.innerHTML = "";
+        for (let i = 0; i < 18; i += 1) {
+          const invader = document.createElement("div");
+          invader.className = "invader";
+          fleet.append(invader);
+        }
+      }
+
+      function moveShip(delta) {
+        shipX = Math.max(8, Math.min(92, shipX + delta));
+        ship.style.left = shipX + "%";
+      }
+
+      function fire() {
+        if (laserTimer) return;
+        const fieldRect = field.getBoundingClientRect();
+        const shipRect = ship.getBoundingClientRect();
+        let y = shipRect.top - fieldRect.top - 24;
+        const x = shipRect.left - fieldRect.left + shipRect.width / 2;
+        laser.style.display = "block";
+        laser.style.left = x + "px";
+        laser.style.top = y + "px";
+
+        laserTimer = setInterval(() => {
+          y -= 12;
+          laser.style.top = y + "px";
+          const laserRect = laser.getBoundingClientRect();
+          for (const invader of [...document.querySelectorAll(".invader")]) {
+            const rect = invader.getBoundingClientRect();
+            const hit =
+              laserRect.left < rect.right &&
+              laserRect.right > rect.left &&
+              laserRect.top < rect.bottom &&
+              laserRect.bottom > rect.top;
+            if (hit) {
+              invader.remove();
+              score += 10;
+              scoreEl.textContent = score;
+              stopLaser();
+              if (!document.querySelector(".invader")) statusEl.textContent = "Cleared. All invaders removed.";
+              return;
+            }
+          }
+          if (y < 10) stopLaser();
+        }, 28);
+      }
+
+      function stopLaser() {
+        clearInterval(laserTimer);
+        laserTimer = null;
+        laser.style.display = "none";
+      }
+
+      function restart() {
+        score = 0;
+        shipX = 50;
+        scoreEl.textContent = score;
+        statusEl.textContent = "Move: Left / Right, Fire: Space";
+        moveShip(0);
+        stopLaser();
+        buildFleet();
+      }
+
+      leftBtn.addEventListener("click", () => moveShip(-8));
+      rightBtn.addEventListener("click", () => moveShip(8));
+      fireBtn.addEventListener("click", fire);
+      resetBtn.addEventListener("click", restart);
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowLeft") moveShip(-8);
+        if (event.key === "ArrowRight") moveShip(8);
+        if (event.code === "Space") {
+          event.preventDefault();
+          fire();
+        }
+      });
+      restart();
     </script>`;
 }
 

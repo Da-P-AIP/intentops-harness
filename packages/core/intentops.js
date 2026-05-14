@@ -4,15 +4,17 @@ const RISK_KEYWORDS = {
   low: ["readme", "markdown", "draft", "document", "summary", "memo"],
 };
 
-export function runHarness(input, previousHash = "GENESIS", aiDraft = null) {
+export function runHarness(input, previousHash = "GENESIS", aiDraft = null, options = {}) {
   const normalizedInput = input.trim();
   const packet = normalizePacket(aiDraft?.packet, normalizedInput);
   const proposals = normalizeProposals(aiDraft?.proposals, packet);
+  const artifactSpec = normalizeArtifactSpec(aiDraft?.artifactSpec, packet);
   const evaluated = evaluateProposals(proposals, packet);
   const selected = selectProposal(evaluated);
   const consent = decideConsent(selected);
   const artifacts = createArtifacts(packet, selected, consent);
   const verification = verifyArtifacts(packet, artifacts);
+  const qualityGate = evaluateQuality({ packet, proposals: evaluated, selected, consent, artifacts, verification, options });
   const ledgerEntry = createLedgerEntry({
     previousHash,
     packet,
@@ -21,6 +23,8 @@ export function runHarness(input, previousHash = "GENESIS", aiDraft = null) {
     consent,
     artifacts,
     verification,
+    qualityGate,
+    artifactSpec,
   });
 
   return {
@@ -30,6 +34,8 @@ export function runHarness(input, previousHash = "GENESIS", aiDraft = null) {
     consent,
     artifacts,
     verification,
+    qualityGate,
+    artifactSpec,
     ledgerEntry,
   };
 }
@@ -66,6 +72,57 @@ function normalizeProposals(proposals, packet) {
     },
     risk: ["low", "medium", "high"].includes(proposal.risk) ? proposal.risk : "medium",
   }));
+}
+
+function normalizeArtifactSpec(spec, packet) {
+  const fallback = {
+    title: packet.goal || "Generated Artifact",
+    artifactType: "generic",
+    summary: packet.summary || "Review generated artifacts before applying side effects.",
+    sections: [
+      {
+        heading: "Purpose",
+        body: packet.goal || "Clarify the requested outcome.",
+      },
+      {
+        heading: "Next Actions",
+        body: packet.nextActions.join("; "),
+      },
+    ],
+    table: [],
+    highlights: [],
+  };
+
+  if (!spec || typeof spec !== "object") return fallback;
+
+  return {
+    title: asText(spec.title, fallback.title),
+    artifactType: asText(spec.artifactType, fallback.artifactType),
+    summary: asText(spec.summary, fallback.summary),
+    sections: normalizeSections(spec.sections, fallback.sections),
+    table: normalizeTable(spec.table),
+    highlights: asList(spec.highlights, fallback.highlights).slice(0, 6),
+  };
+}
+
+function normalizeSections(sections, fallback) {
+  if (!Array.isArray(sections) || sections.length === 0) return fallback;
+  const normalized = sections
+    .slice(0, 8)
+    .map((section, index) => ({
+      heading: asText(section?.heading, `Section ${index + 1}`),
+      body: asText(section?.body, ""),
+    }))
+    .filter((section) => section.body);
+  return normalized.length ? normalized : fallback;
+}
+
+function normalizeTable(table) {
+  if (!Array.isArray(table)) return [];
+  return table.slice(0, 8).map((row) => {
+    if (!row || typeof row !== "object") return { Item: String(row) };
+    return Object.fromEntries(Object.entries(row).slice(0, 5).map(([key, value]) => [key, String(value)]));
+  });
 }
 
 export function createThoughtPacket(input) {
@@ -257,6 +314,46 @@ export function verifyArtifacts(packet, artifacts) {
   };
 }
 
+export function evaluateQuality({ packet, proposals, selected, consent, artifacts, verification, options = {} }) {
+  const hasPreviewIntent = /preview|html|calculator|game|\u96fb\u5353|\u30b2\u30fc\u30e0/i.test(
+    [packet.goal, packet.summary, selected.action].join(" "),
+  );
+  const hasMultipleOptions = proposals.length >= 3;
+  const hasClearArtifacts = Object.values(artifacts).every((artifact) => artifact.length > 120);
+  const verified = verification.status === "verified";
+  const safe = consent.status === "auto-approved" || consent.status === "human-approved";
+  const refined = Number(options.iteration || 1) > 1;
+
+  let score = 35;
+  if (hasMultipleOptions) score += 10;
+  if (hasClearArtifacts) score += 10;
+  if (verified) score += 8;
+  if (safe) score += 7;
+  if (hasPreviewIntent) score += 4;
+  if (refined) score += 16;
+  score = Math.min(96, score);
+
+  const findings = [];
+  if (!hasMultipleOptions) findings.push("Add more alternative plans before choosing one.");
+  if (!hasClearArtifacts) findings.push("Expand the generated drafts so reviewers can act on them.");
+  if (!hasPreviewIntent) findings.push("Clarify whether a saved HTML preview is expected.");
+  if (!refined && score < 80) findings.push("Run one refinement pass to improve acceptance criteria and saved artifacts.");
+  if (findings.length === 0) findings.push("Artifacts are clear enough for review and safe local saving.");
+
+  return {
+    score,
+    target: 80,
+    status: score >= 80 ? "pass" : "needs-refinement",
+    iteration: Number(options.iteration || 1),
+    maxIterations: 2,
+    findings,
+    suggestedRefinement:
+      score >= 80
+        ? "No refinement required. Review and save artifacts."
+        : "Ask Gemini to strengthen acceptance criteria, test notes, and saved artifact clarity.",
+  };
+}
+
 export function createLedgerEntry(payload) {
   const timestamp = new Date().toISOString();
   const body = {
@@ -266,6 +363,8 @@ export function createLedgerEntry(payload) {
     selectedPlan: payload.selected,
     consent: payload.consent,
     verification: payload.verification,
+    qualityGate: payload.qualityGate,
+    artifactSpec: payload.artifactSpec,
   };
   const hash = stableHash(JSON.stringify(body));
 

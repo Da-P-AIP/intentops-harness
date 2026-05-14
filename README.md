@@ -68,12 +68,14 @@ Each entry includes the previous hash, selected plan, consent decision, verifica
 - Thought Packet generation
 - HFE-style proposal comparison and scoring
 - Consent Gate
+- Quality Gate with one controlled refinement pass
 - Action Ledger with hash chaining
 - Processing animation and completion indicators
 - Markdown artifact generation
 - Saved artifact folders under `generated-artifacts/<ledger-hash>/`
 - One-file `artifact-preview.html` output
-- Interactive preview for calculator and mini-game prompts
+- Structured Gemini-guided artifact previews for broader requests
+- Interactive preview for calculator, invader, and mini-game prompts
 
 ## Demo Prompts
 
@@ -92,6 +94,14 @@ Mini-game:
 Create a small mini-game web app.
 Include a saved HTML preview.
 Do not deploy.
+```
+
+Domain report:
+
+```text
+Summarize this financial statement for reviewers.
+Create a saved HTML preview with key metrics, risks, and next actions.
+Do not send anything externally.
 ```
 
 DevOps triage:
@@ -146,7 +156,11 @@ generated-artifacts/<ledger-hash>/
   manifest.json
 ```
 
-`artifact-preview.html` is a one-file browser preview. For calculator and mini-game prompts, it includes a small interactive preview.
+`artifact-preview.html` is a one-file browser preview.
+
+Gemini can provide a restricted `artifactSpec` with a title, summary, highlights, sections, and table rows. The server renders that structured data into HTML after escaping text. Gemini does not write raw HTML, CSS, or JavaScript into saved files.
+
+For calculator, invader, and mini-game prompts, the preview can also include a small local interactive demo.
 
 `generated-artifacts/` is ignored by Git because it is local demo output.
 
@@ -188,6 +202,23 @@ The MVP intentionally does not:
 - expose the Gemini API key to browser-side JavaScript
 
 The browser calls the local Node server. The server calls Gemini and writes local artifacts.
+
+Artifact previews are also constrained. Gemini may shape the preview through structured fields, but the harness owns the HTML renderer and blocks raw script injection from model output.
+
+## Quality Gate
+
+After artifacts are generated, the harness assigns a Quality Score against an 80% target.
+
+If the score is below target and the maximum iteration count has not been reached, the user can click `Refine Once`.
+
+The refinement loop is intentionally bounded:
+
+```text
+max iterations: 2
+target score: 80%
+```
+
+This keeps the agent visibly self-improving without allowing uncontrolled looping.
 
 ## Repository Description
 
