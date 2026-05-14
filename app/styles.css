@@ -171,6 +171,28 @@ textarea:focus {
   border-color: var(--accent);
 }
 
+.task-mode {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mode-button {
+  min-height: 38px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mode-button.active {
+  border-color: var(--accent);
+  background: #ecf8f4;
+  color: var(--accent-dark);
+  box-shadow: inset 0 0 0 1px rgba(31, 122, 109, 0.18);
+}
+
 .button-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -192,6 +214,10 @@ textarea:focus {
 
 .panel.revealed {
   animation: panelReveal 420ms ease both;
+}
+
+.panel.resetting {
+  animation: panelReset 260ms ease;
 }
 
 .artifacts-panel,
@@ -494,6 +520,10 @@ textarea:focus {
   box-shadow:
     0 26px 64px rgba(16, 36, 38, 0.22),
     0 0 34px rgba(44, 184, 199, 0.2);
+}
+
+.loop-console.restarting {
+  animation: consoleReboot 520ms ease both;
 }
 
 .loop-console.processing::after {
@@ -908,6 +938,36 @@ pre {
     opacity: 1;
     transform: translateY(0) scale(1);
     filter: blur(0);
+  }
+}
+
+@keyframes panelReset {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0.38;
+    transform: translateY(8px) scale(0.992);
+    filter: blur(1px);
+  }
+}
+
+@keyframes consoleReboot {
+  0% {
+    filter: saturate(0.7) brightness(0.88);
+    transform: scale(0.996);
+  }
+  48% {
+    filter: saturate(1.25) brightness(1.12);
+    box-shadow:
+      0 26px 64px rgba(16, 36, 38, 0.22),
+      0 0 48px rgba(94, 224, 189, 0.3);
+  }
+  100% {
+    filter: none;
+    transform: scale(1);
   }
 }
 

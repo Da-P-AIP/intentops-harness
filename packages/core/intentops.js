@@ -14,9 +14,19 @@ export function runHarness(input, previousHash = "GENESIS", aiDraft = null, opti
   const consent = decideConsent(selected);
   const artifacts = createArtifacts(packet, selected, consent);
   const verification = verifyArtifacts(packet, artifacts);
-  const qualityGate = evaluateQuality({ packet, proposals: evaluated, selected, consent, artifacts, verification, options });
+  const qualityGate = evaluateQuality({
+    packet,
+    proposals: evaluated,
+    selected,
+    consent,
+    artifacts,
+    verification,
+    artifactSpec,
+    options,
+  });
   const ledgerEntry = createLedgerEntry({
     previousHash,
+    taskMode: options.taskMode || "document",
     packet,
     proposals: evaluated,
     selected,
@@ -314,29 +324,96 @@ export function verifyArtifacts(packet, artifacts) {
   };
 }
 
-export function evaluateQuality({ packet, proposals, selected, consent, artifacts, verification, options = {} }) {
+export function evaluateQuality({
+  packet,
+  proposals,
+  selected,
+  consent,
+  artifacts,
+  verification,
+  artifactSpec = {},
+  options = {},
+}) {
+  const artifactSpecText = [
+    artifactSpec.title,
+    artifactSpec.artifactType,
+    artifactSpec.summary,
+    ...(artifactSpec.highlights || []),
+    ...(artifactSpec.sections || []).flatMap((section) => [section.heading, section.body]),
+    ...(artifactSpec.table || []).flatMap((row) => Object.values(row || {})),
+  ].join(" ");
+  const reviewText = [
+    packet.goal,
+    packet.summary,
+    packet.context,
+    selected.title,
+    selected.action,
+    ...Object.values(artifacts),
+    artifactSpecText,
+  ]
+    .join(" ")
+    .toLowerCase();
   const hasPreviewIntent = /preview|html|calculator|game|\u96fb\u5353|\u30b2\u30fc\u30e0/i.test(
     [packet.goal, packet.summary, selected.action].join(" "),
   );
+  const wantsPlayableArtifact = /game|web app|html app|\u30b2\u30fc\u30e0|\u30a2\u30d7\u30ea|othello|reversi|breakout|invader/.test(
+    reviewText,
+  );
+  const appGameMode = options.taskMode === "app-game";
+  const planOnlyMismatch =
+    (wantsPlayableArtifact || appGameMode) &&
+    /command-line|cli|planning & proposal|planning and proposal|current status planning|development plan|initial plan|outlines the plan|proposed technical approach|proposal only|specification|requirements|\u4ed5\u69d8/.test(
+      reviewText,
+    );
   const hasMultipleOptions = proposals.length >= 3;
   const hasClearArtifacts = Object.values(artifacts).every((artifact) => artifact.length > 120);
   const verified = verification.status === "verified";
   const safe = consent.status === "auto-approved" || consent.status === "human-approved";
+  const hasClearIntent = Boolean(packet.goal && packet.summary && packet.nextActions.length);
+  const hasSpecificIntent =
+    hasPreviewIntent ||
+    (!packet.goal.includes("Clarify developer intent") && packet.summary.replace(/\s+/g, " ").trim().length >= 24);
+  const hasStructuredPreview = Boolean(
+    artifactSpec.title &&
+      artifactSpec.summary &&
+      Array.isArray(artifactSpec.sections) &&
+      artifactSpec.sections.length >= 2,
+  );
+  const hasRichPreview = Boolean(
+    hasStructuredPreview &&
+      ((Array.isArray(artifactSpec.highlights) && artifactSpec.highlights.length >= 2) ||
+        (Array.isArray(artifactSpec.table) && artifactSpec.table.length >= 2)),
+  );
+  const modeAligned = !appGameMode || /game|app|prototype|browser|playable|preview/i.test(artifactSpec.artifactType || reviewText);
   const refined = Number(options.iteration || 1) > 1;
 
-  let score = 35;
-  if (hasMultipleOptions) score += 10;
-  if (hasClearArtifacts) score += 10;
-  if (verified) score += 8;
+  let score = 48;
+  if (hasClearIntent) score += 8;
+  if (hasSpecificIntent) score += 8;
+  if (hasMultipleOptions) score += 8;
+  if (hasClearArtifacts) score += 8;
+  if (verified) score += 7;
   if (safe) score += 7;
-  if (hasPreviewIntent) score += 4;
-  if (refined) score += 16;
-  score = Math.min(96, score);
+  if (hasPreviewIntent) score += 3;
+  if (hasStructuredPreview) score += 4;
+  if (hasRichPreview) score += 3;
+  if (modeAligned) score += 2;
+  if (refined) score += 5;
+  if (!hasSpecificIntent && !refined) score = Math.min(score, 66);
+  if (planOnlyMismatch && !refined) score = Math.min(score, appGameMode ? 68 : 76);
+  if (score >= 90 && !refined) score -= stableHash(reviewText).charCodeAt(2) % 5;
+  score = Math.max(45, Math.min(95, score));
 
   const findings = [];
-  if (!hasMultipleOptions) findings.push("Add more alternative plans before choosing one.");
+  if (!hasClearIntent) findings.push("Clarify the goal, summary, and next actions.");
+  if (!hasSpecificIntent) findings.push("Clarify the requested outcome before treating this as ready.");
+  if (planOnlyMismatch) {
+    findings.push("The selected task mode expects a playable/browser artifact, but the output is still plan-only.");
+  }
+  if (!hasMultipleOptions && score < 80) findings.push("Add more alternative plans before choosing one.");
   if (!hasClearArtifacts) findings.push("Expand the generated drafts so reviewers can act on them.");
-  if (!hasPreviewIntent) findings.push("Clarify whether a saved HTML preview is expected.");
+  if (!hasStructuredPreview && score < 90) findings.push("Add more concrete preview structure for reviewers.");
+  if (!hasPreviewIntent && score < 80) findings.push("Clarify whether a saved HTML preview is expected.");
   if (!refined && score < 80) findings.push("Run one refinement pass to improve acceptance criteria and saved artifacts.");
   if (findings.length === 0) findings.push("Artifacts are clear enough for review and safe local saving.");
 
@@ -359,6 +436,7 @@ export function createLedgerEntry(payload) {
   const body = {
     timestamp,
     previousHash: payload.previousHash,
+    taskMode: payload.taskMode,
     packet: payload.packet,
     selectedPlan: payload.selected,
     consent: payload.consent,

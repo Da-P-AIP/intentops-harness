@@ -24,6 +24,11 @@
           <h2>Developer Note</h2>
           <button id="loadSampleButton" type="button">Load Sample</button>
         </div>
+        <div class="task-mode" role="radiogroup" aria-label="Task type">
+          <button class="mode-button active" data-task-mode="document" type="button">Docs</button>
+          <button class="mode-button" data-task-mode="app-game" type="button">App / Game</button>
+          <button class="mode-button" data-task-mode="general" type="button">Other</button>
+        </div>
         <textarea id="inputText" spellcheck="true">CI is failing after the latest docs change. README needs a clearer setup section, and two related bugs should become GitHub issues. Do not deploy anything automatically. Prefer safe drafts before remote actions.</textarea>
         <div class="button-row">
           <button class="primary" id="runButton" type="button">Run Harness</button>

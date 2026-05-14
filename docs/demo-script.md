@@ -17,7 +17,7 @@ Generate a safe implementation plan, README draft, issue draft, decision record,
 Do not modify project files or deploy anything without approval.
 ```
 
-3. Click `Run Harness`.
+3. Select `App / Game`, then click `Run Harness`.
 
 4. Point out the processing loop:
 
@@ -77,7 +77,13 @@ Observe -> Packetize -> Plan -> Evaluate -> Gate -> Act -> Verify -> Log
 
 ### 3. Live Run
 
-Use the calculator, invader, mini-game, or domain report prompt.
+Use the calculator, invader, Othello, breakout, card-game, mini-game, or domain report prompt.
+
+Select the matching task mode first:
+
+- `Docs` for summaries, READMEs, issue drafts, and reports
+- `App / Game` for playable browser artifacts
+- `Other` for general operational tasks
 
 Click `Run Harness`.
 
@@ -110,7 +116,7 @@ manifest.json
 
 Open `artifact-preview.html`.
 
-For calculator, invader, and mini-game prompts, the preview includes a small local interactive demo.
+For calculator, invader, breakout, Othello, card-game, and mini-game prompts, the preview includes a small local interactive demo.
 
 For broader prompts such as an RPG concept or financial summary, Gemini returns a restricted artifact spec. The harness renders that spec as safe HTML sections, highlights, and table rows.
 

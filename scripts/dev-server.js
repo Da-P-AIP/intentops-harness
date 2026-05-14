@@ -51,6 +51,7 @@ async function handleRun(request, response) {
   const body = await readJsonBody(request);
   const input = String(body.input || "");
   const previousHash = String(body.previousHash || "GENESIS");
+  const taskMode = normalizeTaskMode(body.taskMode);
 
   if (!input.trim()) {
     response.writeHead(400, { "content-type": "application/json; charset=utf-8" });
@@ -58,8 +59,8 @@ async function handleRun(request, response) {
     return;
   }
 
-  const aiDraft = await createGeminiDraft(input);
-  const result = runHarness(input, previousHash, aiDraft);
+  const aiDraft = await createGeminiDraft(input, taskMode);
+  const result = runHarness(input, previousHash, aiDraft, { taskMode });
 
   response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
   response.end(
@@ -77,6 +78,7 @@ async function handleRefine(request, response) {
   const body = await readJsonBody(request);
   const input = String(body.input || "");
   const previousHash = String(body.previousHash || "GENESIS");
+  const taskMode = normalizeTaskMode(body.taskMode);
   const previousResult = body.previousResult || {};
   const previousQuality = previousResult.qualityGate || {};
   const nextIteration = Math.min(Number(previousQuality.iteration || 1) + 1, 2);
@@ -103,8 +105,8 @@ async function handleRefine(request, response) {
     previousResult.selected?.action || "",
   ].join("\n");
 
-  const aiDraft = await createGeminiDraft(refinementInput);
-  const result = runHarness(refinementInput, previousHash, aiDraft, { iteration: nextIteration });
+  const aiDraft = await createGeminiDraft(refinementInput, taskMode);
+  const result = runHarness(refinementInput, previousHash, aiDraft, { iteration: nextIteration, taskMode });
 
   response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
   response.end(
@@ -147,6 +149,7 @@ async function handleSaveArtifacts(request, response) {
           savedAt: new Date().toISOString(),
           ledgerHash: ledgerEntry.hash || null,
           previousHash: ledgerEntry.previousHash || null,
+          taskMode: ledgerEntry.taskMode || null,
           selectedPlan: ledgerEntry.selectedPlan?.title || null,
           consent: ledgerEntry.consent?.status || null,
           qualityScore: ledgerEntry.qualityGate?.score || null,
@@ -188,7 +191,7 @@ function serveStatic(pathname, response) {
   createReadStream(filePath).pipe(response);
 }
 
-async function createGeminiDraft(input) {
+async function createGeminiDraft(input, taskMode = "document") {
   const key = process.env.GEMINI_API_KEY;
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
@@ -199,6 +202,7 @@ async function createGeminiDraft(input) {
     "You are the planning brain for IntentOps Harness, an auditable AI DevOps agent.",
     "Return strict JSON only. Do not wrap it in Markdown.",
     "The harness will handle risk gates and audit logs, so your job is to structure intent and propose safe action options.",
+    `Task mode: ${taskMode}.`,
     "",
     "JSON schema:",
     "{",
@@ -242,6 +246,21 @@ async function createGeminiDraft(input) {
     "For artifactSpec, do not output HTML, CSS, JavaScript, Markdown fences, external links, or remote resources.",
     "Use artifactSpec to make the saved artifact-preview.html domain-aware for the user request.",
     "Examples: RPG requests should include character/map/quest/battle sections; financial requests should include metric rows and risk/next-action sections.",
+    "If the user asks to create a web app or game, prefer a browser artifact/preview direction over CLI unless the user explicitly asks for CLI.",
+    "Avoid selecting a plan-only or requirements-only output when the user asks to make a playable app or game.",
+    ...(taskMode === "app-game"
+      ? [
+          "For app-game mode, the selected proposal must target a browser-based artifact preview.",
+          "Do not choose CLI, document-only, planning-only, or requirements-only output.",
+          "artifactSpec should describe a tangible playable UI state, controls, scoring/state, and core interaction loop.",
+          "If the exact game is unknown to the renderer, still make the preview specific enough for the harness to render a useful prototype.",
+        ]
+      : []),
+    ...(taskMode === "document"
+      ? [
+          "For document mode, prioritize reviewer-ready written artifacts, summaries, decision records, tables, and next actions.",
+        ]
+      : []),
     "",
     "Developer input:",
     input,
@@ -276,6 +295,10 @@ async function createGeminiDraft(input) {
     console.warn(`Gemini fallback: ${error.message}`);
     return null;
   }
+}
+
+function normalizeTaskMode(value) {
+  return ["document", "app-game", "general"].includes(value) ? value : "document";
 }
 
 function readJsonBody(request) {
@@ -333,6 +356,7 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
   const packet = ledgerEntry.packet || {};
   const selectedPlan = ledgerEntry.selectedPlan || {};
   const artifactSpec = ledgerEntry.artifactSpec || {};
+  const taskMode = ledgerEntry.taskMode || "document";
   const sourceText = [
     packet.summary,
     packet.goal,
@@ -343,6 +367,12 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
     artifacts.readmeDraft,
     artifacts.issueDraft,
     artifacts.decisionRecord,
+    artifactSpec.title,
+    artifactSpec.artifactType,
+    artifactSpec.summary,
+    ...(artifactSpec.highlights || []),
+    ...(artifactSpec.sections || []).flatMap((section) => [section.heading, section.body]),
+    ...(artifactSpec.table || []).flatMap((row) => Object.values(row || {})),
   ]
     .filter(Boolean)
     .join("\n")
@@ -352,18 +382,46 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
     sourceText.includes("invader") ||
     sourceText.includes("space invaders") ||
     sourceText.includes("\u30a4\u30f3\u30d9\u30fc\u30c0\u30fc");
+  const shouldShowBreakout =
+    sourceText.includes("breakout") ||
+    sourceText.includes("brick breaker") ||
+    sourceText.includes("brick-breaker") ||
+    sourceText.includes("\u30d6\u30ed\u30c3\u30af\u5d29\u3057");
+  const shouldShowPacMaze =
+    sourceText.includes("pac-man") ||
+    sourceText.includes("pacman") ||
+    sourceText.includes("pac maze") ||
+    sourceText.includes("pac-maze") ||
+    sourceText.includes("\u30d1\u30c3\u30af\u30de\u30f3");
+  const shouldShowOthello =
+    sourceText.includes("othello") ||
+    sourceText.includes("reversi") ||
+    sourceText.includes("\u30aa\u30bb\u30ed");
+  const shouldShowWarCard = sourceText.includes("war card") || sourceText.includes("'war'") || sourceText.includes("card game");
+  const shouldShowGenericAppGame =
+    taskMode === "app-game" && String(artifactSpec.artifactType || "").toLowerCase() === "game";
   const shouldShowGame =
     sourceText.includes("mini-game") ||
     sourceText.includes("minigame") ||
-    sourceText.includes("game") ||
-    sourceText.includes("\u30b2\u30fc\u30e0");
+    sourceText.includes("click game") ||
+    sourceText.includes("tap game");
   const optionalDemo = shouldShowCalculator
     ? calculatorDemoHtml()
     : shouldShowInvader
       ? invaderDemoHtml()
-      : shouldShowGame
-        ? gameDemoHtml()
-        : structuredPreviewHtml(artifactSpec);
+      : shouldShowBreakout
+        ? breakoutDemoHtml()
+        : shouldShowPacMaze
+          ? pacMazeDemoHtml()
+          : shouldShowOthello
+            ? othelloDemoHtml()
+            : shouldShowWarCard
+              ? warCardDemoHtml()
+              : shouldShowGame
+                ? gameDemoHtml()
+                : shouldShowGenericAppGame
+                  ? genericAppGameDemoHtml(artifactSpec)
+                  : structuredPreviewHtml(artifactSpec);
 
   return `<!doctype html>
 <html lang="en">
@@ -486,8 +544,13 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
       }
       ${shouldShowCalculator ? calculatorStyles() : ""}
       ${shouldShowInvader ? invaderStyles() : ""}
+      ${shouldShowBreakout ? breakoutStyles() : ""}
+      ${shouldShowPacMaze ? pacMazeStyles() : ""}
+      ${shouldShowOthello ? othelloStyles() : ""}
+      ${shouldShowWarCard ? warCardStyles() : ""}
       ${shouldShowGame ? gameStyles() : ""}
-      ${!shouldShowCalculator && !shouldShowInvader && !shouldShowGame ? structuredPreviewStyles() : ""}
+      ${shouldShowGenericAppGame && !shouldShowPacMaze && !shouldShowOthello && !shouldShowWarCard && !shouldShowBreakout && !shouldShowInvader && !shouldShowCalculator && !shouldShowGame ? genericAppGameStyles() : ""}
+      ${!shouldShowCalculator && !shouldShowInvader && !shouldShowBreakout && !shouldShowPacMaze && !shouldShowOthello && !shouldShowWarCard && !shouldShowGame && !shouldShowGenericAppGame ? structuredPreviewStyles() : ""}
     </style>
   </head>
   <body>
@@ -541,7 +604,12 @@ function createArtifactPreview({ artifacts, ledgerEntry, input, outputDir, hash 
     </main>
     ${shouldShowCalculator ? calculatorScript() : ""}
     ${shouldShowInvader ? invaderScript() : ""}
+    ${shouldShowBreakout ? breakoutScript() : ""}
+    ${shouldShowPacMaze ? pacMazeScript() : ""}
+    ${shouldShowOthello ? othelloScript() : ""}
+    ${shouldShowWarCard ? warCardScript() : ""}
     ${shouldShowGame ? gameScript() : ""}
+    ${shouldShowGenericAppGame && !shouldShowPacMaze && !shouldShowOthello && !shouldShowWarCard && !shouldShowBreakout && !shouldShowInvader && !shouldShowCalculator && !shouldShowGame ? genericAppGameScript() : ""}
   </body>
 </html>
 `;
@@ -668,6 +736,89 @@ function invaderDemoHtml() {
             <button id="fireBtn" type="button">Fire</button>
             <button id="rightBtn" type="button">Right</button>
             <button id="resetInvaders" type="button">Restart</button>
+          </div>
+        </div>
+      </section>`;
+}
+
+function breakoutDemoHtml() {
+  return `<section>
+        <h2>Block Breaker Preview</h2>
+        <div class="breakout-demo" aria-label="Block breaker game preview">
+          <div class="breakout-hud">
+            <strong>Score: <span id="breakoutScore">0</span></strong>
+            <span id="breakoutStatus">Move the paddle and break all blocks.</span>
+          </div>
+          <canvas id="breakoutCanvas" width="520" height="340"></canvas>
+          <div class="breakout-controls">
+            <button id="breakoutLeft" type="button">Left</button>
+            <button id="breakoutLaunch" type="button">Launch</button>
+            <button id="breakoutRight" type="button">Right</button>
+            <button id="breakoutReset" type="button">Restart</button>
+          </div>
+        </div>
+      </section>`;
+}
+
+function pacMazeDemoHtml() {
+  return `<section>
+        <h2>Pac-Maze Preview</h2>
+        <div class="pac-demo" aria-label="Pac-Man inspired maze preview">
+          <div class="pac-hud">
+            <strong>Score: <span id="pacScore">0</span></strong>
+            <span id="pacStatus">Use arrow keys. Collect all pellets.</span>
+          </div>
+          <div id="pacMaze" aria-label="Pac maze board"></div>
+          <button id="pacReset" type="button">Restart</button>
+        </div>
+      </section>`;
+}
+
+function othelloDemoHtml() {
+  return `<section>
+        <h2>Othello Preview</h2>
+        <div class="othello-demo" aria-label="Othello game preview">
+          <div class="othello-hud">
+            <strong>Turn: <span id="othelloTurn">Black</span></strong>
+            <span id="othelloScore">Black 2 / White 2</span>
+          </div>
+          <div id="othelloBoard" aria-label="Othello board"></div>
+          <p id="othelloStatus">Place a disc on a highlighted square.</p>
+          <button id="othelloReset" type="button">Restart</button>
+        </div>
+      </section>`;
+}
+
+function genericAppGameDemoHtml(spec = {}) {
+  return `<section>
+        <h2>${escapeHtml(spec.title || "Playable Prototype Preview")}</h2>
+        <div class="proto-demo" aria-label="Generic playable game preview">
+          <div class="proto-hud">
+            <strong>Score: <span id="protoScore">0</span></strong>
+            <span id="protoStatus">Move with arrow keys and collect the markers.</span>
+          </div>
+          <div id="protoField"></div>
+          <button id="protoReset" type="button">Restart</button>
+        </div>
+      </section>`;
+}
+
+function warCardDemoHtml() {
+  return `<section>
+        <h2>Card Game Preview</h2>
+        <div class="war-demo" aria-label="War card game preview">
+          <div class="war-score">
+            <strong>Player <span id="playerScore">0</span></strong>
+            <strong>CPU <span id="cpuScore">0</span></strong>
+          </div>
+          <div class="war-table">
+            <div class="card-face" id="playerCard">?</div>
+            <div class="card-face" id="cpuCard">?</div>
+          </div>
+          <p id="warStatus">Draw a card. Higher card wins the round.</p>
+          <div class="war-actions">
+            <button id="drawCard" type="button">Draw</button>
+            <button id="resetWar" type="button">Restart</button>
           </div>
         </div>
       </section>`;
@@ -960,6 +1111,282 @@ function invaderStyles() {
       }`;
 }
 
+function breakoutStyles() {
+  return `
+      .breakout-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .breakout-hud {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      #breakoutCanvas {
+        display: block;
+        width: 100%;
+        max-width: 520px;
+        aspect-ratio: 52 / 34;
+        border-radius: 8px;
+        background:
+          linear-gradient(rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          #101b1f;
+        background-size: 24px 24px;
+        box-shadow: inset 0 0 0 1px rgba(94, 224, 189, 0.16);
+      }
+      .breakout-controls {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .breakout-controls button {
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 900;
+      }`;
+}
+
+function pacMazeStyles() {
+  return `
+      .pac-demo,
+      .proto-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .pac-hud,
+      .proto-hud {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      #pacMaze {
+        display: grid;
+        grid-template-columns: repeat(11, 28px);
+        gap: 3px;
+        width: max-content;
+        max-width: 100%;
+        overflow: auto;
+        border-radius: 8px;
+        background: #101b1f;
+        padding: 8px;
+      }
+      .pac-cell {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 5px;
+        background: #172124;
+      }
+      .pac-wall {
+        background: #1f7a6d;
+        box-shadow: inset 0 0 0 1px rgba(94, 224, 189, 0.35);
+      }
+      .pac-pellet::after {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #f8fbf9;
+        content: "";
+      }
+      .pac-player::after,
+      .pac-enemy::after {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        content: "";
+      }
+      .pac-player::after {
+        background: #f0c84b;
+        box-shadow: 0 0 14px rgba(240, 200, 75, 0.55);
+      }
+      .pac-enemy::after {
+        background: #d85f7a;
+        border-radius: 50% 50% 4px 4px;
+      }
+      #pacReset {
+        margin-top: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }`;
+}
+
+function genericAppGameStyles() {
+  return `
+      .proto-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .proto-hud {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      #protoField {
+        position: relative;
+        height: 340px;
+        overflow: hidden;
+        border-radius: 8px;
+        background:
+          linear-gradient(rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(94, 224, 189, 0.08) 1px, transparent 1px),
+          #101b1f;
+        background-size: 24px 24px;
+      }
+      .proto-player,
+      .proto-marker {
+        position: absolute;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+      }
+      .proto-player {
+        width: 34px;
+        height: 34px;
+        background: var(--mint);
+        box-shadow: 0 0 18px rgba(94, 224, 189, 0.55);
+      }
+      .proto-marker {
+        width: 18px;
+        height: 18px;
+        background: #fff;
+        box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
+      }
+      #protoReset {
+        margin-top: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }`;
+}
+
+function othelloStyles() {
+  return `
+      .othello-demo,
+      .war-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .othello-hud,
+      .war-score {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      #othelloBoard {
+        display: grid;
+        grid-template-columns: repeat(8, minmax(28px, 1fr));
+        gap: 4px;
+        max-width: 440px;
+        border-radius: 8px;
+        background: #172124;
+        padding: 8px;
+      }
+      .othello-cell {
+        position: relative;
+        aspect-ratio: 1;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 6px;
+        background: #1f7a6d;
+        cursor: pointer;
+      }
+      .othello-cell.valid {
+        box-shadow: inset 0 0 0 2px rgba(94, 224, 189, 0.8);
+      }
+      .othello-cell.black::after,
+      .othello-cell.white::after {
+        position: absolute;
+        inset: 16%;
+        border-radius: 50%;
+        content: "";
+      }
+      .othello-cell.black::after {
+        background: #172124;
+        box-shadow: inset 0 0 0 2px rgba(255,255,255,0.08);
+      }
+      .othello-cell.white::after {
+        background: #f8fbf9;
+        box-shadow: inset 0 0 0 2px rgba(0,0,0,0.12);
+      }
+      #othelloStatus {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      #othelloReset {
+        min-height: 38px;
+        color: var(--accent);
+        font-weight: 900;
+      }`;
+}
+
+function warCardStyles() {
+  return `
+      .war-demo {
+        border: 1px solid rgba(31, 122, 109, 0.2);
+        border-radius: 8px;
+        background: #f6fbf9;
+        padding: 16px;
+      }
+      .war-score,
+      .war-actions,
+      .war-table {
+        display: flex;
+        gap: 12px;
+      }
+      .war-score {
+        justify-content: space-between;
+        color: var(--accent);
+        font-weight: 900;
+      }
+      .war-table {
+        justify-content: center;
+        margin: 22px 0;
+      }
+      .card-face {
+        display: grid;
+        place-items: center;
+        width: 120px;
+        height: 166px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        font-size: 42px;
+        font-weight: 900;
+        box-shadow: 0 14px 24px rgba(26, 38, 41, 0.12);
+      }
+      .war-actions button {
+        color: var(--accent);
+        font-weight: 900;
+      }`;
+}
+
 function calculatorScript() {
   return `<script>
       const display = document.querySelector("#display");
@@ -1133,6 +1560,444 @@ function invaderScript() {
         }
       });
       restart();
+    </script>`;
+}
+
+function breakoutScript() {
+  return `<script>
+      const canvas = document.querySelector("#breakoutCanvas");
+      const context = canvas.getContext("2d");
+      const scoreEl = document.querySelector("#breakoutScore");
+      const statusEl = document.querySelector("#breakoutStatus");
+      const leftButton = document.querySelector("#breakoutLeft");
+      const rightButton = document.querySelector("#breakoutRight");
+      const launchButton = document.querySelector("#breakoutLaunch");
+      const resetButton = document.querySelector("#breakoutReset");
+      const width = canvas.width;
+      const height = canvas.height;
+      const keys = new Set();
+      let paddle;
+      let ball;
+      let bricks;
+      let score;
+      let running;
+      let frame;
+
+      function reset() {
+        paddle = { x: width / 2 - 48, y: height - 28, w: 96, h: 12, speed: 7 };
+        ball = { x: width / 2, y: height - 46, r: 7, dx: 3.4, dy: -3.8 };
+        bricks = [];
+        score = 0;
+        running = false;
+        scoreEl.textContent = score;
+        statusEl.textContent = "Press Launch, then use Left / Right or arrow keys.";
+        for (let row = 0; row < 4; row += 1) {
+          for (let col = 0; col < 8; col += 1) {
+            bricks.push({ x: 24 + col * 60, y: 38 + row * 28, w: 48, h: 16, alive: true });
+          }
+        }
+        draw();
+      }
+
+      function draw() {
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#101b1f";
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = "rgba(94, 224, 189, 0.12)";
+        for (let x = 0; x < width; x += 24) {
+          context.beginPath();
+          context.moveTo(x, 0);
+          context.lineTo(x, height);
+          context.stroke();
+        }
+        for (let y = 0; y < height; y += 24) {
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        }
+        for (const brick of bricks) {
+          if (!brick.alive) continue;
+          context.fillStyle = "#5ee0bd";
+          context.shadowColor = "rgba(94, 224, 189, 0.7)";
+          context.shadowBlur = 10;
+          context.fillRect(brick.x, brick.y, brick.w, brick.h);
+        }
+        context.shadowBlur = 0;
+        context.fillStyle = "#1f7a6d";
+        context.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+        context.beginPath();
+        context.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+        context.fillStyle = "#ffffff";
+        context.shadowColor = "rgba(255, 255, 255, 0.85)";
+        context.shadowBlur = 12;
+        context.fill();
+        context.shadowBlur = 0;
+      }
+
+      function collideBrick() {
+        for (const brick of bricks) {
+          if (!brick.alive) continue;
+          const hit =
+            ball.x + ball.r > brick.x &&
+            ball.x - ball.r < brick.x + brick.w &&
+            ball.y + ball.r > brick.y &&
+            ball.y - ball.r < brick.y + brick.h;
+          if (hit) {
+            brick.alive = false;
+            ball.dy *= -1;
+            score += 10;
+            scoreEl.textContent = score;
+            if (bricks.every((item) => !item.alive)) {
+              running = false;
+              statusEl.textContent = "Cleared. All blocks removed.";
+            }
+            return;
+          }
+        }
+      }
+
+      function step() {
+        if (keys.has("ArrowLeft")) paddle.x -= paddle.speed;
+        if (keys.has("ArrowRight")) paddle.x += paddle.speed;
+        paddle.x = Math.max(0, Math.min(width - paddle.w, paddle.x));
+
+        if (running) {
+          ball.x += ball.dx;
+          ball.y += ball.dy;
+          if (ball.x - ball.r <= 0 || ball.x + ball.r >= width) ball.dx *= -1;
+          if (ball.y - ball.r <= 0) ball.dy *= -1;
+          const paddleHit =
+            ball.x > paddle.x &&
+            ball.x < paddle.x + paddle.w &&
+            ball.y + ball.r >= paddle.y &&
+            ball.y - ball.r <= paddle.y + paddle.h;
+          if (paddleHit && ball.dy > 0) ball.dy *= -1;
+          collideBrick();
+          if (ball.y - ball.r > height) {
+            running = false;
+            statusEl.textContent = "Missed. Press Restart to try again.";
+          }
+        } else if (statusEl.textContent.startsWith("Press")) {
+          ball.x = paddle.x + paddle.w / 2;
+          ball.y = paddle.y - 18;
+        }
+
+        draw();
+        frame = requestAnimationFrame(step);
+      }
+
+      function launch() {
+        if (!running && !bricks.every((item) => !item.alive)) {
+          running = true;
+          statusEl.textContent = "Breaking blocks.";
+        }
+      }
+
+      leftButton.addEventListener("pointerdown", () => keys.add("ArrowLeft"));
+      leftButton.addEventListener("pointerup", () => keys.delete("ArrowLeft"));
+      rightButton.addEventListener("pointerdown", () => keys.add("ArrowRight"));
+      rightButton.addEventListener("pointerup", () => keys.delete("ArrowRight"));
+      launchButton.addEventListener("click", launch);
+      resetButton.addEventListener("click", reset);
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") keys.add(event.key);
+        if (event.code === "Space") {
+          event.preventDefault();
+          launch();
+        }
+      });
+      window.addEventListener("keyup", (event) => keys.delete(event.key));
+      reset();
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(step);
+    </script>`;
+}
+
+function pacMazeScript() {
+  return `<script>
+      const mazeEl = document.querySelector("#pacMaze");
+      const scoreEl = document.querySelector("#pacScore");
+      const statusEl = document.querySelector("#pacStatus");
+      const resetEl = document.querySelector("#pacReset");
+      const layout = [
+        "###########",
+        "#.........#",
+        "#.###.###.#",
+        "#.#.....#.#",
+        "#.#.###.#.#",
+        "#...#E#...#",
+        "#.#.###.#.#",
+        "#.#.....#.#",
+        "#.###.###.#",
+        "#P........#",
+        "###########",
+      ];
+      let player;
+      let enemy;
+      let pellets;
+      let score;
+
+      function resetPac() {
+        pellets = new Set();
+        score = 0;
+        layout.forEach((row, r) => {
+          [...row].forEach((cell, c) => {
+            if (cell === "P") player = { r, c };
+            if (cell === "E") enemy = { r, c };
+            if (cell === ".") pellets.add(r + "," + c);
+          });
+        });
+        renderPac();
+      }
+
+      function isWall(r, c) {
+        return !layout[r] || layout[r][c] === "#";
+      }
+
+      function movePac(dr, dc) {
+        const next = { r: player.r + dr, c: player.c + dc };
+        if (isWall(next.r, next.c)) return;
+        player = next;
+        const key = player.r + "," + player.c;
+        if (pellets.delete(key)) {
+          score += 10;
+          scoreEl.textContent = score;
+        }
+        moveEnemy();
+        renderPac();
+      }
+
+      function moveEnemy() {
+        const options = [[1,0],[-1,0],[0,1],[0,-1]]
+          .map(([dr, dc]) => ({ r: enemy.r + dr, c: enemy.c + dc }))
+          .filter((pos) => !isWall(pos.r, pos.c));
+        options.sort((a, b) => Math.abs(a.r - player.r) + Math.abs(a.c - player.c) - (Math.abs(b.r - player.r) + Math.abs(b.c - player.c)));
+        enemy = options[0] || enemy;
+      }
+
+      function renderPac() {
+        mazeEl.innerHTML = "";
+        scoreEl.textContent = score;
+        for (let r = 0; r < layout.length; r += 1) {
+          for (let c = 0; c < layout[r].length; c += 1) {
+            const cell = document.createElement("div");
+            cell.className = "pac-cell";
+            if (layout[r][c] === "#") cell.classList.add("pac-wall");
+            if (pellets.has(r + "," + c)) cell.classList.add("pac-pellet");
+            if (player.r === r && player.c === c) cell.classList.add("pac-player");
+            if (enemy.r === r && enemy.c === c) cell.classList.add("pac-enemy");
+            mazeEl.append(cell);
+          }
+        }
+        if (enemy.r === player.r && enemy.c === player.c) statusEl.textContent = "Caught. Restart to try again.";
+        else if (pellets.size === 0) statusEl.textContent = "Cleared. All pellets collected.";
+        else statusEl.textContent = "Use arrow keys. Pellets remaining: " + pellets.size;
+      }
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowUp") movePac(-1, 0);
+        if (event.key === "ArrowDown") movePac(1, 0);
+        if (event.key === "ArrowLeft") movePac(0, -1);
+        if (event.key === "ArrowRight") movePac(0, 1);
+      });
+      resetEl.addEventListener("click", resetPac);
+      resetPac();
+    </script>`;
+}
+
+function genericAppGameScript() {
+  return `<script>
+      const field = document.querySelector("#protoField");
+      const scoreEl = document.querySelector("#protoScore");
+      const statusEl = document.querySelector("#protoStatus");
+      const resetEl = document.querySelector("#protoReset");
+      let player;
+      let markers;
+      let score;
+
+      function resetProto() {
+        field.innerHTML = "";
+        player = document.createElement("div");
+        player.className = "proto-player";
+        player.style.left = "24px";
+        player.style.top = "24px";
+        field.append(player);
+        markers = [];
+        score = 0;
+        scoreEl.textContent = score;
+        statusEl.textContent = "Move with arrow keys and collect the markers.";
+        for (let i = 0; i < 8; i += 1) {
+          const marker = document.createElement("div");
+          marker.className = "proto-marker";
+          marker.style.left = 48 + Math.random() * 380 + "px";
+          marker.style.top = 48 + Math.random() * 220 + "px";
+          field.append(marker);
+          markers.push(marker);
+        }
+      }
+
+      function moveProto(dx, dy) {
+        const box = field.getBoundingClientRect();
+        const x = Math.max(0, Math.min(box.width - 34, player.offsetLeft + dx));
+        const y = Math.max(0, Math.min(box.height - 34, player.offsetTop + dy));
+        player.style.left = x + "px";
+        player.style.top = y + "px";
+        const playerRect = player.getBoundingClientRect();
+        for (const marker of [...markers]) {
+          const rect = marker.getBoundingClientRect();
+          const hit = playerRect.left < rect.right && playerRect.right > rect.left && playerRect.top < rect.bottom && playerRect.bottom > rect.top;
+          if (hit) {
+            marker.remove();
+            markers = markers.filter((item) => item !== marker);
+            score += 10;
+            scoreEl.textContent = score;
+          }
+        }
+        if (markers.length === 0) statusEl.textContent = "Cleared. Prototype loop complete.";
+      }
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowUp") moveProto(0, -18);
+        if (event.key === "ArrowDown") moveProto(0, 18);
+        if (event.key === "ArrowLeft") moveProto(-18, 0);
+        if (event.key === "ArrowRight") moveProto(18, 0);
+      });
+      resetEl.addEventListener("click", resetProto);
+      resetProto();
+    </script>`;
+}
+
+function othelloScript() {
+  return `<script>
+      const boardEl = document.querySelector("#othelloBoard");
+      const turnEl = document.querySelector("#othelloTurn");
+      const scoreEl = document.querySelector("#othelloScore");
+      const statusEl = document.querySelector("#othelloStatus");
+      const resetEl = document.querySelector("#othelloReset");
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      let board;
+      let turn;
+
+      function resetOthello() {
+        board = Array.from({ length: 8 }, () => Array(8).fill(""));
+        board[3][3] = "white";
+        board[3][4] = "black";
+        board[4][3] = "black";
+        board[4][4] = "white";
+        turn = "black";
+        renderOthello();
+      }
+
+      function captures(row, col, color) {
+        if (board[row][col]) return [];
+        const other = color === "black" ? "white" : "black";
+        const flips = [];
+        for (const [dr, dc] of dirs) {
+          const line = [];
+          let r = row + dr;
+          let c = col + dc;
+          while (r >= 0 && r < 8 && c >= 0 && c < 8 && board[r][c] === other) {
+            line.push([r, c]);
+            r += dr;
+            c += dc;
+          }
+          if (line.length && r >= 0 && r < 8 && c >= 0 && c < 8 && board[r][c] === color) flips.push(...line);
+        }
+        return flips;
+      }
+
+      function validMoves(color) {
+        const moves = [];
+        for (let r = 0; r < 8; r += 1) {
+          for (let c = 0; c < 8; c += 1) {
+            if (captures(r, c, color).length) moves.push([r, c]);
+          }
+        }
+        return moves;
+      }
+
+      function play(row, col) {
+        const flips = captures(row, col, turn);
+        if (!flips.length) return;
+        board[row][col] = turn;
+        for (const [r, c] of flips) board[r][c] = turn;
+        turn = turn === "black" ? "white" : "black";
+        if (!validMoves(turn).length) turn = turn === "black" ? "white" : "black";
+        renderOthello();
+      }
+
+      function renderOthello() {
+        boardEl.innerHTML = "";
+        const moves = validMoves(turn).map(([r, c]) => r + "," + c);
+        let black = 0;
+        let white = 0;
+        for (let r = 0; r < 8; r += 1) {
+          for (let c = 0; c < 8; c += 1) {
+            const cell = document.createElement("button");
+            const value = board[r][c];
+            if (value === "black") black += 1;
+            if (value === "white") white += 1;
+            cell.className = "othello-cell " + value + (moves.includes(r + "," + c) ? " valid" : "");
+            cell.type = "button";
+            cell.addEventListener("click", () => play(r, c));
+            boardEl.append(cell);
+          }
+        }
+        turnEl.textContent = turn === "black" ? "Black" : "White";
+        scoreEl.textContent = "Black " + black + " / White " + white;
+        statusEl.textContent = moves.length ? "Place a disc on a highlighted square." : "No legal moves remain.";
+      }
+
+      resetEl.addEventListener("click", resetOthello);
+      resetOthello();
+    </script>`;
+}
+
+function warCardScript() {
+  return `<script>
+      const playerCard = document.querySelector("#playerCard");
+      const cpuCard = document.querySelector("#cpuCard");
+      const playerScoreEl = document.querySelector("#playerScore");
+      const cpuScoreEl = document.querySelector("#cpuScore");
+      const statusEl = document.querySelector("#warStatus");
+      const drawEl = document.querySelector("#drawCard");
+      const resetEl = document.querySelector("#resetWar");
+      let playerScore = 0;
+      let cpuScore = 0;
+      const labels = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+
+      function draw() {
+        const player = 1 + Math.floor(Math.random() * 13);
+        const cpu = 1 + Math.floor(Math.random() * 13);
+        playerCard.textContent = labels[player - 1];
+        cpuCard.textContent = labels[cpu - 1];
+        if (player > cpu) {
+          playerScore += 1;
+          statusEl.textContent = "Player wins the round.";
+        } else if (cpu > player) {
+          cpuScore += 1;
+          statusEl.textContent = "CPU wins the round.";
+        } else {
+          statusEl.textContent = "War. This preview counts ties as a draw.";
+        }
+        playerScoreEl.textContent = playerScore;
+        cpuScoreEl.textContent = cpuScore;
+      }
+
+      function reset() {
+        playerScore = 0;
+        cpuScore = 0;
+        playerScoreEl.textContent = "0";
+        cpuScoreEl.textContent = "0";
+        playerCard.textContent = "?";
+        cpuCard.textContent = "?";
+        statusEl.textContent = "Draw a card. Higher card wins the round.";
+      }
+
+      drawEl.addEventListener("click", draw);
+      resetEl.addEventListener("click", reset);
+      reset();
     </script>`;
 }
 

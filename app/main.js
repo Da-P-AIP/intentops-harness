@@ -21,11 +21,13 @@ const state = {
   ledger: [],
   latestResult: null,
   activeArtifact: "readmeDraft",
+  taskMode: "document",
 };
 
 const elements = {
   inputText: document.querySelector("#inputText"),
   loadSampleButton: document.querySelector("#loadSampleButton"),
+  modeButtons: [...document.querySelectorAll(".mode-button")],
   runButton: document.querySelector("#runButton"),
   approveButton: document.querySelector("#approveButton"),
   packetOutput: document.querySelector("#packetOutput"),
@@ -65,6 +67,13 @@ elements.loadSampleButton.addEventListener("click", () => {
   elements.inputText.value = sampleText;
 });
 
+for (const button of elements.modeButtons) {
+  button.addEventListener("click", () => {
+    state.taskMode = button.dataset.taskMode;
+    renderTaskMode();
+  });
+}
+
 elements.runButton.addEventListener("click", async () => {
   const input = elements.inputText.value.trim();
   if (!input) {
@@ -73,6 +82,7 @@ elements.runButton.addEventListener("click", async () => {
   }
 
   const previousHash = state.ledger.at(-1)?.hash ?? "GENESIS";
+  resetRunView();
   beginProcessing();
   animateLoop();
 
@@ -294,6 +304,48 @@ function renderTabs() {
   }
 }
 
+function resetRunView() {
+  state.latestResult = null;
+  state.activeArtifact = "readmeDraft";
+  elements.loopConsole.classList.remove("processing");
+  elements.loopStage.classList.remove("running");
+  elements.loopStatus.textContent = "standby";
+  elements.processTitle.textContent = "standby";
+  elements.completionBeacon.classList.remove("ready");
+  elements.completionNote.textContent = "Artifacts will glow when the run is complete.";
+  elements.artifactsPanel.classList.remove("complete-glow", "revealed");
+
+  for (const node of elements.loopNodes) {
+    node.classList.remove("active", "done");
+  }
+
+  for (const step of elements.processSteps) {
+    step.classList.remove("active", "done");
+  }
+
+  for (const panel of elements.revealPanels) {
+    panel.classList.remove("revealed", "resetting");
+    void panel.offsetWidth;
+    panel.classList.add("resetting");
+  }
+
+  elements.packetOutput.innerHTML = "";
+  elements.urgencyBadge.textContent = "not run";
+  elements.urgencyBadge.className = "badge";
+  elements.selectedBadge.textContent = "waiting";
+  elements.proposalOutput.innerHTML = "";
+  elements.consentBadge.textContent = "waiting";
+  elements.consentBadge.className = "badge";
+  elements.consentReason.textContent = "Run the harness to evaluate execution permission.";
+  elements.verificationOutput.innerHTML = "";
+  renderQuality(null);
+  renderArtifact();
+  renderTabs();
+  elements.saveArtifactsButton.disabled = true;
+  elements.saveNote.textContent = "Saved files will appear under generated-artifacts/.";
+  elements.saveNote.classList.remove("saved");
+}
+
 function renderLedger() {
   elements.ledgerCount.textContent = `${state.ledger.length} entries`;
   const latestHash = state.ledger.at(-1)?.hash ?? "GENESIS";
@@ -325,6 +377,9 @@ function scoreCell(label, value) {
 
 function beginProcessing(activeSteps = []) {
   elements.loopConsole.classList.add("processing");
+  elements.loopConsole.classList.remove("restarting");
+  void elements.loopConsole.offsetWidth;
+  elements.loopConsole.classList.add("restarting");
   elements.processTitle.textContent = "drive sequence active";
   elements.completionBeacon.classList.remove("ready");
   elements.completionNote.textContent = "Generating artifacts...";
@@ -350,7 +405,7 @@ function endProcessing(ai) {
 function revealResults() {
   elements.revealPanels.forEach((panel, index) => {
     window.setTimeout(() => {
-      panel.classList.remove("revealed");
+      panel.classList.remove("revealed", "resetting");
       void panel.offsetWidth;
       panel.classList.add("revealed");
     }, index * 70);
@@ -362,7 +417,7 @@ async function runWithServer(input, previousHash) {
     const response = await fetch("/api/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input, previousHash }),
+      body: JSON.stringify({ input, previousHash, taskMode: state.taskMode }),
     });
 
     if (!response.ok) throw new Error(`server returned ${response.status}`);
@@ -370,7 +425,7 @@ async function runWithServer(input, previousHash) {
   } catch (error) {
     console.warn(`Local fallback: ${error.message}`);
     return {
-      ...runHarness(input, previousHash),
+      ...runHarness(input, previousHash, null, { taskMode: state.taskMode }),
       input,
       ai: { provider: "local", model: "browser-fallback", status: "fallback" },
     };
@@ -382,7 +437,7 @@ async function refineWithServer(input, previousHash, previousResult) {
     const response = await fetch("/api/refine", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input, previousHash, previousResult }),
+      body: JSON.stringify({ input, previousHash, previousResult, taskMode: state.taskMode }),
     });
 
     if (!response.ok) throw new Error(`server returned ${response.status}`);
@@ -394,11 +449,17 @@ async function refineWithServer(input, previousHash, previousResult) {
         `${input}\n\nRefine once: strengthen acceptance criteria, test notes, and saved artifact clarity.`,
         previousHash,
         null,
-        { iteration: 2 },
+        { iteration: 2, taskMode: state.taskMode },
       ),
       input,
       ai: { provider: "local", model: "browser-refine-fallback", status: "fallback" },
     };
+  }
+}
+
+function renderTaskMode() {
+  for (const button of elements.modeButtons) {
+    button.classList.toggle("active", button.dataset.taskMode === state.taskMode);
   }
 }
 
@@ -476,3 +537,4 @@ function signalCompletion(ai) {
 }
 
 renderArtifact();
+renderTaskMode();

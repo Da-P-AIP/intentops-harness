@@ -75,9 +75,12 @@ Each entry includes the previous hash, selected plan, consent decision, verifica
 - Saved artifact folders under `generated-artifacts/<ledger-hash>/`
 - One-file `artifact-preview.html` output
 - Structured Gemini-guided artifact previews for broader requests
-- Interactive preview for calculator, invader, and mini-game prompts
+- Task mode selector for document, app/game, and general requests
+- Interactive preview for calculator, invader, breakout, Othello, card-game, and mini-game prompts
 
 ## Demo Prompts
+
+Before running app or game prompts, select `App / Game` in the left pane. This tells the harness to reject plan-only output when the request expects a playable browser artifact.
 
 Calculator:
 
@@ -209,7 +212,7 @@ Artifact previews are also constrained. Gemini may shape the preview through str
 
 After artifacts are generated, the harness assigns a Quality Score against an 80% target.
 
-If the score is below target and the maximum iteration count has not been reached, the user can click `Refine Once`.
+Good first-pass outputs can pass immediately. If the score is below target and the maximum iteration count has not been reached, the user can click `Refine Once`.
 
 The refinement loop is intentionally bounded:
 
@@ -218,7 +221,7 @@ max iterations: 2
 target score: 80%
 ```
 
-This keeps the agent visibly self-improving without allowing uncontrolled looping.
+This keeps the agent able to self-improve when quality is actually low, without intentionally weakening the first result or allowing uncontrolled looping.
 
 ## Repository Description
 
